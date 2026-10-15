@@ -307,6 +307,8 @@ extension PeerInfoScreenNode {
                 return
             }
             push(self.context.sharedContext.makeWalletScreen(context: self.context))
+        case .ayuGram:
+            push(ayuSettingsController(context: self.context))
         }
     }
 

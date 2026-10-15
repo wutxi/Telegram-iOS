@@ -492,6 +492,9 @@ private class ReplyThreadHistoryContextImpl {
                     return .single(.boolFalse)
                 }
                 |> ignoreValues
+                if !AyuSettings.sendReadMessages {
+                    signal = .complete()
+                }
                 if revalidate {
                     let validateSignal = strongSelf.account.network.request(Api.functions.messages.getDiscussionMessage(peer: inputPeer, msgId: Int32(clamping: threadId)))
                     |> map { result -> (MessageId?, Int) in

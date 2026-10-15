@@ -292,6 +292,9 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
                     |> mapToSignal { _ -> Signal<Void, NoError> in
                         return .complete()
                     }
+                    if !AyuSettings.sendReadMessages {
+                        pushSignal = .complete()
+                    }
                     if markedUnread {
                         pushSignal = pushSignal
                         |> then(network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, parentPeer: nil, peer: .inputDialogPeer(.init(peer: inputPeer))))
@@ -329,6 +332,9 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
                             }
                         }
                         return .complete()
+                    }
+                    if !AyuSettings.sendReadMessages {
+                        pushSignal = .complete()
                     }
 
                     if markedUnread {
