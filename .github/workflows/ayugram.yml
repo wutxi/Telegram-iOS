@@ -1,0 +1,106 @@
+name: AyuGram IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ ayugram ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: '0'
+
+      - name: Set active Xcode path
+        run: |
+          XCODE_VERSION=$(python3 -c 'import json;print(json.load(open("versions.json"))["xcode"])')
+          if [ -d "/Applications/Xcode_$XCODE_VERSION.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_$XCODE_VERSION.app/Contents/Developer"
+          else
+            echo "Xcode $XCODE_VERSION not found, available:"; ls /Applications | grep Xcode
+          fi
+          xcodebuild -version
+
+      - name: Create canonical source directory
+        run: |
+          sudo mkdir -p /Users/Shared
+          cp -R $GITHUB_WORKSPACE /Users/Shared/
+          mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
+
+      - name: Write build configuration
+        env:
+          API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          if [ -z "$API_ID" ] || [ -z "$API_HASH" ]; then
+            echo "Set TELEGRAM_API_ID and TELEGRAM_API_HASH repository secrets"; exit 1
+          fi
+          cd /Users/Shared/telegram-ios
+          # bundle_id and team_id must match build-system/fake-codesigning profiles;
+          # SideStore re-signs the IPA with its own bundle id
+          python3 - <<'EOF'
+          import json, os
+          path = "build-system/appstore-configuration.json"
+          config = json.load(open(path))
+          config["api_id"] = os.environ["API_ID"]
+          config["api_hash"] = os.environ["API_HASH"]
+          json.dump(config, open("/Users/Shared/ayugram-configuration.json", "w"), indent=4)
+          EOF
+
+      - name: Restore Bazel cache
+        uses: actions/cache@v4
+        with:
+          path: /Users/Shared/telegram-bazel-cache
+          key: bazel-${{ runner.os }}-${{ hashFiles('versions.json', 'MODULE.bazel.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ hashFiles('versions.json', 'MODULE.bazel.lock') }}-
+            bazel-${{ runner.os }}-
+
+      - name: Build the App
+        run: |
+          set -x
+          SOURCE_DIR=/Users/Shared/telegram-ios
+          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
+          cd $SOURCE_DIR
+
+          BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
+          export APP_VERSION=$(python3 -c 'import json;print(json.load(open("versions.json"))["app"])')
+          export BUILD_NUMBER="$(($(git rev-list --count HEAD)+$BUILD_NUMBER_OFFSET))"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+
+          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 -u build-system/Make/Make.py \
+            --overrideXcodeVersion \
+            --bazelUserRoot="$BAZEL_USER_ROOT" \
+            --cacheDir=/Users/Shared/telegram-bazel-cache \
+            build \
+            --configurationPath=/Users/Shared/ayugram-configuration.json \
+            --codesigningInformationPath=build-system/fake-codesigning \
+            --configuration=release_arm64 \
+            --buildNumber="$BUILD_NUMBER"
+
+          mkdir -p build/artifacts
+          cp bazel-bin/Telegram/Telegram.ipa build/artifacts/AyuGram.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}
+          path: /Users/Shared/telegram-ios/build/artifacts/AyuGram.ipa
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ayugram-${{ env.BUILD_NUMBER }}
+          name: AyuGram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
+          body: Unsigned build. Install via SideStore/AltStore.
+          files: /Users/Shared/telegram-ios/build/artifacts/AyuGram.ipa
